@@ -1,4 +1,8 @@
+use inquire::Select;
+use pad::PadStr;
 use serde::Deserialize;
+use std::fmt;
+use std::os::unix::process::CommandExt;
 
 fn main() {
     seahorse::App::new("youtube")
@@ -7,7 +11,12 @@ fn main() {
 }
 
 fn run(c: &seahorse::Context) {
-    let q = c.args.first().map_or("".to_string(), |str| str.to_owned());
+    let qf = c.args.join(" ");
+    let q = qf.trim();
+    if q == "" {
+        return;
+    }
+
     let base = get_random_instance();
 
     let res = tinyget::get(format!("{}/api/v1/search/?q={}", base, q))
@@ -17,12 +26,26 @@ fn run(c: &seahorse::Context) {
     let results: Vec<Video> =
         serde_json::from_slice(res.as_bytes()).expect("failed to deserialize video results");
 
-    for vid in results {
-        if vid.type_ != "video" {
-            continue;
-        }
+    let mut select = Select::new("Video results:", results);
+    select.vim_mode = true;
 
-        println!("{}: {} / {}", vid.title, vid.id, vid.view_count_text);
+    match select.prompt() {
+        Err(_) => {}
+        Ok(choice) => {
+            println!(
+                "chosen {}, opening {}",
+                &choice.title.as_ref().unwrap_or(&"<no-title>".to_string()),
+                &choice.id.as_ref().unwrap_or(&"<no-id>".to_string())
+            );
+            match choice.id {
+                Some(id) => {
+                    std::process::Command::new("mpv")
+                        .arg(format!("https://youtube.com/watch?v={}", id))
+                        .exec();
+                }
+                None => {}
+            }
+        }
     }
 }
 
@@ -62,9 +85,9 @@ struct Instance {
 struct Video {
     #[serde(rename = "type")]
     type_: String,
-    title: String,
+    title: Option<String>,
     #[serde(rename = "videoId")]
-    id: String,
+    id: Option<String>,
     author: String,
     #[serde(rename = "authorVerified")]
     verified: bool,
@@ -82,6 +105,56 @@ struct Video {
     published: u32,
     #[serde(rename = "publishedText")]
     published_text: String,
+}
+
+impl fmt::Display for Video {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.type_.as_str() {
+            "video" => {
+                let duration = if self.length_seconds < 60 {
+                    format!("{}s", self.length_seconds)
+                } else {
+                    format!(
+                        "{}min{}s",
+                        self.length_seconds / 60,
+                        self.length_seconds % 60
+                    )
+                };
+
+                write!(
+                    f,
+                    "{} | {} | {} | {} | {} | {}",
+                    clamped(
+                        &self.title.as_ref().unwrap_or(&"<no-title>".to_string()),
+                        40
+                    ),
+                    clamped(&self.author, 14),
+                    clamped(&duration, 6),
+                    clamped(&self.view_count_text, 8),
+                    clamped(&self.published_text, 11),
+                    self.description
+                )
+            }
+            _ => {
+                write!(
+                    f,
+                    "[{}] {}",
+                    self.type_,
+                    &self.title.as_ref().unwrap_or(&"<no-title>".to_string()),
+                )
+            }
+        }
+    }
+}
+
+fn clamped(str: &String, pct: usize) -> String {
+    let (cols, _) = crossterm::terminal::size().unwrap();
+    let width = std::cmp::min(90, cols) as usize;
+    let to = width * pct / 100;
+
+    let mut v = str.pad_to_width(to);
+    v.truncate(to);
+    v
 }
 
 #[allow(dead_code)]
