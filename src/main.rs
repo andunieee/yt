@@ -11,7 +11,13 @@ fn main() {
 }
 
 fn run(c: &seahorse::Context) {
-    let qf = c.args.join(" ");
+    let qf = c
+        .args
+        .clone()
+        .iter_mut()
+        .map(|arg| arg.replace(" ", "+"))
+        .collect::<Vec<String>>()
+        .join("+");
     let q = qf.trim();
     if q == "" {
         return;
@@ -19,6 +25,7 @@ fn run(c: &seahorse::Context) {
 
     let base = get_random_instance();
 
+    print!("searching {}", q);
     let res = tinyget::get(format!("{}/api/v1/search/?q={}", base, q))
         .send()
         .expect(format!("failed to search {}", &base).as_str());
@@ -88,51 +95,59 @@ struct Video {
     title: Option<String>,
     #[serde(rename = "videoId")]
     id: Option<String>,
-    author: String,
-    #[serde(rename = "authorVerified")]
-    verified: bool,
+    author: Option<String>,
     #[serde(rename = "videoThumbnails")]
-    thumbnails: Vec<Thumb>,
-    description: String,
-    #[serde(rename = "descriptionHtml")]
-    description_html: String,
-    #[serde(rename = "viewCount")]
-    view_count: u32,
+    thumbnails: Option<Vec<Thumb>>,
+    description: Option<String>,
     #[serde(rename = "viewCountText")]
-    view_count_text: String,
+    view_count_text: Option<String>,
     #[serde(rename = "lengthSeconds")]
-    length_seconds: u32,
-    published: u32,
+    length_seconds: Option<u32>,
     #[serde(rename = "publishedText")]
-    published_text: String,
+    published_text: Option<String>,
 }
 
 impl fmt::Display for Video {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.type_.as_str() {
             "video" => {
-                let duration = if self.length_seconds < 60 {
-                    format!("{}s", self.length_seconds)
-                } else {
-                    format!(
-                        "{}min{}s",
-                        self.length_seconds / 60,
-                        self.length_seconds % 60
-                    )
-                };
+                let duration = self.length_seconds.map_or("".to_string(), |ls| {
+                    if ls < 60 {
+                        format!("{}s", ls)
+                    } else if ls < 60 * 20 {
+                        format!("{}min{}s", ls / 60, ls % 60)
+                    } else if ls < 60 * 60 {
+                        format!("{}min", ls / 60)
+                    } else {
+                        format!("{}h{}min", ls / 3600, ls % 3600 / 60)
+                    }
+                });
 
                 write!(
                     f,
                     "{} | {} | {} | {} | {} | {}",
                     clamped(
-                        &self.title.as_ref().unwrap_or(&"<no-title>".to_string()),
-                        40
+                        &self.title.as_ref().map_or("<no-title>", |s| s.as_str()),
+                        60
                     ),
-                    clamped(&self.author, 14),
-                    clamped(&duration, 6),
-                    clamped(&self.view_count_text, 8),
-                    clamped(&self.published_text, 11),
-                    self.description
+                    clamped(&duration, 7),
+                    clamped(
+                        &self
+                            .view_count_text
+                            .as_ref()
+                            .map_or("", |s| s.as_str())
+                            .split(" ")
+                            .take(1)
+                            .collect::<String>()
+                            .as_str(),
+                        5
+                    ),
+                    clamped(&self.published_text.as_ref().unwrap_or(&"_".to_string()), 8),
+                    clamped(
+                        &self.author.as_ref().map_or("<no-author>", |s| s.as_str()),
+                        15
+                    ),
+                    &self.description.as_ref().map_or("", |s| s.as_str())
                 )
             }
             _ => {
@@ -147,7 +162,7 @@ impl fmt::Display for Video {
     }
 }
 
-fn clamped(str: &String, pct: usize) -> String {
+fn clamped(str: &str, pct: usize) -> String {
     let (cols, _) = crossterm::terminal::size().unwrap();
     let width = std::cmp::min(90, cols) as usize;
     let to = width * pct / 100;
