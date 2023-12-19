@@ -167,9 +167,15 @@ fn clamped(str: &str, pct: usize) -> String {
     let width = std::cmp::min(90, cols) as usize;
     let to = width * pct / 100;
 
-    let mut v = str.pad_to_width(to);
-    v.truncate(to);
-    v
+    first_n_chars(str, to).pad_to_width(to)
+}
+
+fn first_n_chars(s: &str, n: usize) -> &str {
+    if let Some((x, _)) = s.char_indices().nth(n) {
+        &s[..x]
+    } else {
+        s
+    }
 }
 
 #[allow(dead_code)]
