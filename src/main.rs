@@ -1,4 +1,4 @@
-use inquire::Select;
+use inquire::{Confirm, Select};
 use pad::PadStr;
 use serde::Deserialize;
 use std::fmt;
@@ -30,70 +30,79 @@ fn run(c: &seahorse::Context) {
         .send()
         .expect(format!("failed to search {}", &base).as_str());
 
-    let results: Vec<Video> =
-        serde_json::from_slice(res.as_bytes()).expect("failed to deserialize video results");
+    let mut viuer_config = viuer::Config::default();
+    viuer_config.absolute_offset = false;
+    viuer_config.restore_cursor = false;
+    viuer_config.x = 4;
+    viuer_config.transparent = true;
 
-    let mut select = Select::new("Video results:", results);
-    select.vim_mode = true;
+    loop {
+        let results: Vec<SearchResult> = serde_json::from_slice(res.as_bytes()).expect(
+            format!(
+                "failed to deserialize video results: {}",
+                res.as_str().expect("result-no-str")
+            )
+            .as_str(),
+        );
+        let mut select = Select::new("Video results:", results);
+        select.vim_mode = true;
 
-    match select.prompt() {
-        Err(_) => {}
-        Ok(choice) => {
-            println!(
-                "chosen {}, opening {}",
-                &choice.title.as_ref().unwrap_or(&"<no-title>".to_string()),
-                &choice.id.as_ref().unwrap_or(&"<no-id>".to_string())
-            );
-            match choice.id {
-                Some(id) => {
-                    std::process::Command::new("mpv")
-                        .arg(format!("https://youtube.com/watch?v={}", id))
-                        .exec();
-                }
-                None => {}
+        match select.prompt() {
+            Err(_) => {
+                return;
             }
+            Ok(choice) => match &choice.id.as_ref() {
+                Some(id) => {
+                    let arg = if choice.type_ == "video" {
+                        let _ = choice.thumbnails.as_ref().map_or(None, |thumbs| {
+                            let thumb = thumbs.iter().find(|thumb| thumb.quality == "default")?;
+                            let res = tinyget::get(&thumb.url).send().ok()?;
+                            let img = image::load_from_memory(res.as_bytes()).ok()?;
+                            let smaller = viuer::resize(&img, Some(30), None);
+                            viuer::print(&smaller, &viuer_config).ok()?;
+                            Some(())
+                        });
+
+                        format!("https://youtube.com/watch?v={}", id)
+                    } else if choice.type_ == "playlist" {
+                        format!("https://youtube.com/playlist?list={}", id)
+                    } else {
+                        return;
+                    };
+
+                    println!("{}", choice);
+                    match Confirm::new("continue?")
+                        .with_default(true)
+                        .with_parser(&|_| Ok(true))
+                        .with_formatter(&|_| "".to_string())
+                        .with_default_value_formatter(&|_| "".to_string())
+                        .with_placeholder("")
+                        .with_help_message("Enter to proceed, Esc to go back")
+                        .prompt_skippable()
+                        .ok()
+                    {
+                        Some(Some(true)) => {
+                            std::process::Command::new("mpv").arg(arg).exec();
+                            return;
+                        }
+                        _ => continue,
+                    }
+                }
+                None => {
+                    return;
+                }
+            },
         }
     }
 }
 
-fn get_random_instance() -> String {
-    let home = homedir::get_my_home().unwrap().unwrap();
-    let cache_dir = home.join(".cache/yt");
-    std::fs::create_dir_all(cache_dir).expect("failed to create cache dir");
-
-    let res = tinyget::get("https://api.invidious.io/instances.json")
-        .send()
-        .expect("failed to get list of instances");
-    let instances: Vec<String> = serde_json::from_slice::<Vec<(String, Instance)>>(res.as_bytes())
-        .expect("failed to deserialize list of instances")
-        .iter()
-        .filter_map(|(_, inst)| {
-            if inst.type_.starts_with("http") && Some(true) == inst.api {
-                Some(inst.uri.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    instances[rand::random::<usize>() % instances.len()].clone()
-}
-
-#[derive(Debug, Deserialize)]
-struct Instance {
-    #[serde(rename = "type")]
-    type_: String,
-    uri: String,
-    api: Option<bool>,
-}
-
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-struct Video {
+struct SearchResult {
     #[serde(rename = "type")]
     type_: String,
     title: Option<String>,
-    #[serde(rename = "videoId")]
+    #[serde(rename = "videoId", alias = "playlistId")]
     id: Option<String>,
     author: Option<String>,
     #[serde(rename = "videoThumbnails")]
@@ -107,7 +116,7 @@ struct Video {
     published_text: Option<String>,
 }
 
-impl fmt::Display for Video {
+impl fmt::Display for SearchResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.type_.as_str() {
             "video" => {
@@ -150,10 +159,21 @@ impl fmt::Display for Video {
                     &self.description.as_ref().map_or("", |s| s.as_str())
                 )
             }
+            "playlist" => {
+                write!(
+                    f,
+                    "<playlist> \"{}\" by {}",
+                    &self.title.as_ref().unwrap_or(&"<no-title>".to_string()),
+                    clamped(
+                        &self.author.as_ref().map_or("<no-author>", |s| s.as_str()),
+                        15
+                    ),
+                )
+            }
             _ => {
                 write!(
                     f,
-                    "[{}] {}",
+                    "<{}> {}",
                     self.type_,
                     &self.title.as_ref().unwrap_or(&"<no-title>".to_string()),
                 )
@@ -185,4 +205,35 @@ struct Thumb {
     url: String,
     width: u16,
     height: u16,
+}
+
+fn get_random_instance() -> String {
+    let home = homedir::get_my_home().unwrap().unwrap();
+    let cache_dir = home.join(".cache/yt");
+    std::fs::create_dir_all(cache_dir).expect("failed to create cache dir");
+
+    let res = tinyget::get("https://api.invidious.io/instances.json")
+        .send()
+        .expect("failed to get list of instances");
+    let instances: Vec<String> = serde_json::from_slice::<Vec<(String, Instance)>>(res.as_bytes())
+        .expect("failed to deserialize list of instances")
+        .iter()
+        .filter_map(|(_, inst)| {
+            if inst.type_.starts_with("http") && Some(true) == inst.api {
+                Some(inst.uri.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    instances[rand::random::<usize>() % instances.len()].clone()
+}
+
+#[derive(Debug, Deserialize)]
+struct Instance {
+    #[serde(rename = "type")]
+    type_: String,
+    uri: String,
+    api: Option<bool>,
 }
