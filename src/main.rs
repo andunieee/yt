@@ -5,7 +5,9 @@ use std::fmt;
 use std::os::unix::process::CommandExt;
 
 fn main() {
-    seahorse::App::new("youtube")
+    seahorse::App::new("yt")
+        .usage("yt [search terms]")
+        .description("search, select and play youtube videos")
         .action(run)
         .run(std::env::args().collect())
 }
