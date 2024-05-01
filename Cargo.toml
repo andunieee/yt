@@ -1,6 +1,6 @@
 [package]
 name = "yt"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Andunië", "andunie@cassis.cash"]
 description = "youtube cli basic client"
