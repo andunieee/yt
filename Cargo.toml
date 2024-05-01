@@ -8,8 +8,7 @@ repository = "https://github.com/andunieee/yt"
 license = "MIT"
 keywords = ["youtube", "yt-dlp", "youtube-dl", "mpv", "invidious"]
 categories = ["command-line-utilities"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+exclude = ["screenshots"]
 
 [dependencies]
 crossterm = "0.27.0"
