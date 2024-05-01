@@ -1,15 +1,21 @@
 use inquire::{Confirm, Select};
 use pad::PadStr;
 use serde::Deserialize;
-use std::fmt;
-use std::os::unix::process::CommandExt;
+use std::{
+    env, fmt,
+    fs::{self, File},
+    os::unix::process::CommandExt,
+    path::Path,
+    process::Command,
+    time::{Duration, SystemTime},
+};
 
 fn main() {
     seahorse::App::new("yt")
         .usage("yt [search terms]")
         .description("search, select and play youtube videos")
         .action(run)
-        .run(std::env::args().collect())
+        .run(env::args().collect())
 }
 
 fn run(c: &seahorse::Context) {
@@ -84,7 +90,7 @@ fn run(c: &seahorse::Context) {
                         .ok()
                     {
                         Some(Some(true)) => {
-                            std::process::Command::new("mpv").arg(arg).exec();
+                            Command::new("mpv").arg(arg).exec();
                             return;
                         }
                         _ => continue,
@@ -211,9 +217,40 @@ struct Thumb {
 
 fn get_random_instance() -> String {
     let home = homedir::get_my_home().unwrap().unwrap();
-    let cache_dir = home.join(".cache/yt");
-    std::fs::create_dir_all(cache_dir).expect("failed to create cache dir");
+    let mut cache_dir = home.join(".cache/yt");
+    fs::create_dir_all(&cache_dir).expect("failed to create cache dir");
 
+    cache_dir.push("invidious_instances.json");
+    let cache_file_path = cache_dir.as_path();
+
+    let instances = if !Path::new(cache_file_path).exists() {
+        // file doesn't exist, fetch instances and save them locally
+        let instances = fetch_instances_list();
+        let file = File::create(cache_file_path).unwrap();
+        serde_json::to_writer(file, &instances).unwrap();
+        instances
+    } else {
+        // file exists, check its date
+        let metadata = fs::metadata(cache_file_path).unwrap();
+        let creation_time = metadata.created().unwrap();
+        let now = SystemTime::now();
+        let file_age = now.duration_since(creation_time).unwrap();
+        if file_age > Duration::from_secs(14 * 24 * 60 * 60) {
+            // it's too old, replace
+            let instances = fetch_instances_list();
+            let file = File::create(cache_file_path).unwrap();
+            serde_json::to_writer(file, &instances).unwrap();
+            instances
+        } else {
+            let file = File::open(cache_file_path).unwrap();
+            serde_json::from_reader(file).expect("cached invidious list is broken")
+        }
+    };
+
+    instances[rand::random::<usize>() % instances.len()].clone()
+}
+
+fn fetch_instances_list() -> Vec<String> {
     let res = tinyget::get("https://api.invidious.io/instances.json")
         .send()
         .expect("failed to get list of instances");
@@ -229,7 +266,7 @@ fn get_random_instance() -> String {
         })
         .collect();
 
-    instances[rand::random::<usize>() % instances.len()].clone()
+    instances
 }
 
 #[derive(Debug, Deserialize)]
